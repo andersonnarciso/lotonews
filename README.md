@@ -1,2 +1,2 @@
 # lotonews
-Resultados das loterias
+Aplicação web para acompanhamento de resultados de loterias brasileiras
