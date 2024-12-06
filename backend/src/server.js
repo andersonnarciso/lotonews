@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const { Sequelize, DataTypes } = require('sequelize');
+const { Sequelize, DataTypes, Op } = require('sequelize');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -167,6 +167,43 @@ app.get('/api/:loteria/:concurso', async (req, res) => {
   } catch (error) {
     console.error('Error fetching contest details:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Rota para buscar resultados com filtros
+app.get('/api/search', async (req, res) => {
+  try {
+    const { loteria, concurso, dataInicio, dataFim } = req.query;
+    let where = {};
+
+    if (loteria) {
+      where.loteria = loteria;
+    }
+
+    if (concurso) {
+      where.concurso = concurso;
+    }
+
+    if (dataInicio || dataFim) {
+      where.data_sorteio = {};
+      if (dataInicio) {
+        where.data_sorteio[Op.gte] = new Date(dataInicio);
+      }
+      if (dataFim) {
+        where.data_sorteio[Op.lte] = new Date(dataFim);
+      }
+    }
+
+    const resultados = await Sorteio.findAll({
+      where,
+      order: [['data_sorteio', 'DESC']],
+      limit: req.query.limit ? parseInt(req.query.limit) : undefined
+    });
+
+    res.json(resultados);
+  } catch (error) {
+    console.error('Erro na busca:', error);
+    res.status(500).json({ error: 'Erro ao buscar resultados' });
   }
 });
 
