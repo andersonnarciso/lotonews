@@ -30,7 +30,7 @@ function LotteryCard({ resultado }) {
 
   return (
     <Link 
-      to={\`/\${loteria}/\${concurso}\`}
+      to={`/${loteria}/${concurso}`}
       className="block w-full transition-transform hover:scale-102 focus:outline-none focus:ring-2"
       style={{ borderColor: config.cor }}
     >
@@ -41,7 +41,7 @@ function LotteryCard({ resultado }) {
         
         <div 
           className="p-4"
-          style={{ backgroundColor: config.cor + '10' }}
+          style={{ backgroundColor: `${config.cor}10` }}
         >
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold" style={{ color: config.cor }}>
