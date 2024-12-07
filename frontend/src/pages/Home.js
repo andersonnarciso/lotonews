@@ -1,128 +1,166 @@
 import React, { useState, useEffect } from 'react';
 import LotteryCard from '../components/LotteryCard';
+import api from '../services/api';
 import { LOTERIAS } from '../constants/loterias';
 
 function Home() {
   const [resultados, setResultados] = useState([]);
-  const [filteredResultados, setFilteredResultados] = useState([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedLoteria, setSelectedLoteria] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedLottery, setSelectedLottery] = useState('');
+  const [concursos, setConcursos] = useState([]);
+  const [selectedConcurso, setSelectedConcurso] = useState('');
 
   useEffect(() => {
-    fetchResultados();
+    fetchLatestResults();
   }, []);
 
-  const fetchResultados = async () => {
+  useEffect(() => {
+    if (selectedLottery) {
+      fetchConcursos(selectedLottery);
+    }
+  }, [selectedLottery]);
+
+  useEffect(() => {
+    if (selectedLottery && selectedConcurso) {
+      fetchSpecificResult(selectedLottery, selectedConcurso);
+    }
+  }, [selectedConcurso]);
+
+  const fetchLatestResults = async () => {
     try {
-      const response = await fetch('http://localhost:3001/api/latest');
-      const data = await response.json();
-      setResultados(data);
-      setFilteredResultados(data);
+      setLoading(true);
+      const response = await api.get('/latest');
+      setResultados(response.data);
+      setError(null);
+    } catch (err) {
+      setError('Erro ao carregar resultados');
+      console.error('Erro:', err);
+    } finally {
       setLoading(false);
-    } catch (error) {
-      console.error('Erro ao buscar resultados:', error);
+    }
+  };
+
+  const fetchConcursos = async (loteria) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await api.get(`/${loteria}/concursos`);
+      setConcursos(response.data);
+    } catch (err) {
+      setError('Erro ao carregar concursos');
+      console.error('Erro:', err);
+    } finally {
       setLoading(false);
     }
   };
 
-  const handleSearch = (e) => {
-    const value = e.target.value;
-    setSearchTerm(value);
-    filterResultados(value, selectedLoteria);
+  const fetchSpecificResult = async (loteria, concurso) => {
+    try {
+      setLoading(true);
+      setError(null);
+      const response = await api.get(`/search?loteria=${loteria}&concurso=${concurso}`);
+      if (response.data.length > 0) {
+        setResultados([response.data[0]]);
+      }
+    } catch (err) {
+      setError('Erro ao carregar resultado específico');
+      console.error('Erro:', err);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleLoteriaFilter = (e) => {
-    const value = e.target.value;
-    setSelectedLoteria(value);
-    filterResultados(searchTerm, value);
+  const handleLotteryChange = (e) => {
+    setSelectedLottery(e.target.value);
+    setSelectedConcurso('');
+    setConcursos([]);
   };
 
-  const filterResultados = (search, loteria) => {
-    let filtered = [...resultados];
+  const handleConcursoChange = (e) => {
+    setSelectedConcurso(e.target.value);
+  };
 
-    if (loteria) {
-      filtered = filtered.filter(resultado => resultado.loteria === loteria);
-    }
-
-    if (search) {
-      filtered = filtered.filter(resultado => 
-        resultado.concurso.toString().includes(search) ||
-        resultado.numeros.some(n => n.toString().includes(search))
-      );
-    }
-
-    setFilteredResultados(filtered);
+  const handleReset = () => {
+    setSelectedLottery('');
+    setSelectedConcurso('');
+    setConcursos([]);
+    fetchLatestResults();
   };
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-100 p-4">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto"></div>
-            <p className="mt-4 text-gray-600">Carregando resultados...</p>
-          </div>
-        </div>
+      <div className="flex justify-center items-center min-h-screen">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex justify-center items-center min-h-screen">
+        <div className="text-red-500">{error}</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100">
-      <div className="max-w-7xl mx-auto p-4">
-        {/* Search and Filter Section */}
-        <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Pesquisar por concurso ou números
-              </label>
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={handleSearch}
-                placeholder="Ex: 2650 ou 10"
-                className="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Filtrar por loteria
-              </label>
-              <select
-                value={selectedLoteria}
-                onChange={handleLoteriaFilter}
-                className="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="">Todas as loterias</option>
-                {Object.entries(LOTERIAS).map(([key, value]) => (
-                  <option key={key} value={key}>
-                    {value.nome}
-                  </option>
-                ))}
-              </select>
-            </div>
+    <div className="container mx-auto px-4 py-8">
+      <div className="bg-white rounded-lg shadow-md p-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Loteria
+            </label>
+            <select
+              value={selectedLottery}
+              onChange={handleLotteryChange}
+              className="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">Selecione uma loteria</option>
+              {Object.entries(LOTERIAS).map(([key, value]) => (
+                <option key={key} value={key}>{value.nome}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Concurso
+            </label>
+            <select
+              value={selectedConcurso}
+              onChange={handleConcursoChange}
+              className="w-full p-2 border rounded-md focus:ring-2 focus:ring-blue-500"
+              disabled={!selectedLottery}
+            >
+              <option value="">Selecione um concurso</option>
+              {concursos.map((concurso) => (
+                <option key={concurso.concurso} value={concurso.concurso}>
+                  Concurso {concurso.concurso} - {new Date(concurso.data_sorteio).toLocaleDateString()}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
-        {/* Results Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {filteredResultados.map((resultado) => (
-            <LotteryCard 
-              key={`${resultado.loteria}-${resultado.concurso}`} 
-              resultado={resultado} 
-            />
-          ))}
+        <div className="mt-4 flex justify-end">
+          <button
+            onClick={handleReset}
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500"
+          >
+            Limpar filtros
+          </button>
         </div>
+      </div>
 
-        {filteredResultados.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-gray-600">
-              Nenhum resultado encontrado para sua pesquisa.
-            </p>
-          </div>
-        )}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {resultados.map((resultado) => (
+          <LotteryCard 
+            key={`${resultado.loteria}-${resultado.concurso}`} 
+            resultado={resultado} 
+          />
+        ))}
       </div>
     </div>
   );

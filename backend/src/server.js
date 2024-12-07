@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
-const { Sequelize, DataTypes, Op } = require('sequelize');
+const { Sequelize, DataTypes, Op, QueryTypes } = require('sequelize');
+const axios = require('axios');
+const cron = require('node-cron');
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -50,6 +52,146 @@ const Sorteio = sequelize.define('Sorteio', {
 }, {
   tableName: 'sorteios',
   timestamps: true
+});
+
+// URLs base para cada loteria
+const LOTTERY_URLS = {
+  megasena: 'https://servicebus2.caixa.gov.br/portaldeloterias/api/megasena',
+  lotofacil: 'https://servicebus2.caixa.gov.br/portaldeloterias/api/lotofacil',
+  quina: 'https://servicebus2.caixa.gov.br/portaldeloterias/api/quina',
+  lotomania: 'https://servicebus2.caixa.gov.br/portaldeloterias/api/lotomania',
+  timemania: 'https://servicebus2.caixa.gov.br/portaldeloterias/api/timemania'
+};
+
+// Função para converter data no formato DD/MM/YYYY para YYYY-MM-DD
+function convertDate(dateStr) {
+  if (!dateStr) return null;
+  const [day, month, year] = dateStr.split('/');
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+// Função para baixar resultados de uma loteria
+async function downloadResults(loteria) {
+  try {
+    const baseUrl = LOTTERY_URLS[loteria];
+    if (!baseUrl) {
+      throw new Error(`Loteria não suportada: ${loteria}`);
+    }
+
+    // Primeiro, obtemos o último concurso
+    const response = await axios.get(baseUrl);
+    const data = response.data;
+    
+    if (!data || !data.numero) {
+      throw new Error(`Não foi possível obter o último concurso de ${loteria}`);
+    }
+
+    const latestConcurso = parseInt(data.numero, 10);
+    if (isNaN(latestConcurso)) {
+      throw new Error(`Número do concurso inválido: ${data.numero}`);
+    }
+
+    console.log(`Baixando resultados de ${loteria}, último concurso: ${latestConcurso}`);
+
+    // Baixa os últimos 100 concursos
+    const startConcurso = latestConcurso;
+    const endConcurso = Math.max(1, latestConcurso - 100);
+    let foundValidResult = false;
+    
+    for (let concurso = startConcurso; concurso >= endConcurso; concurso--) {
+      try {
+        // Verifica se já temos este resultado
+        const existing = await Sorteio.findOne({
+          where: { loteria, concurso }
+        });
+
+        if (existing) {
+          console.log(`Concurso ${concurso} já existe no banco`);
+          continue;
+        }
+
+        const url = `${baseUrl}/${concurso}`;
+        console.log(`Buscando ${url}`);
+        
+        const response = await axios.get(url);
+        const data = response.data;
+
+        if (!data || !data.numero) {
+          console.log(`Concurso ${concurso} não encontrado`);
+          continue;
+        }
+
+        foundValidResult = true;
+
+        // Converte a data para o formato correto
+        const dataFormatada = convertDate(data.dataApuracao);
+        if (!dataFormatada) {
+          console.log(`Data inválida para o concurso ${concurso}: ${data.dataApuracao}`);
+          continue;
+        }
+
+        await Sorteio.create({
+          loteria,
+          concurso: data.numero,
+          data_sorteio: dataFormatada,
+          numeros: data.dezenasSorteadasOrdemSorteio,
+          premiacoes: data.listaRateioPremio || [],
+          acumulou: data.acumulado
+        });
+
+        console.log(`Concurso ${data.numero} salvo com sucesso`);
+        
+        // Pequena pausa para não sobrecarregar a API
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        if (error.response && error.response.status === 404) {
+          console.log(`Concurso ${concurso} não existe`);
+          if (foundValidResult) {
+            // Se já encontramos algum resultado válido e agora estamos tendo 404,
+            // provavelmente chegamos ao fim dos concursos disponíveis
+            break;
+          }
+        } else {
+          console.error(`Erro ao baixar concurso ${concurso}:`, error.message);
+        }
+        // Pausa maior em caso de erro
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    }
+
+    if (!foundValidResult) {
+      throw new Error(`Não foi possível encontrar nenhum resultado válido para ${loteria}`);
+    }
+
+    return true;
+  } catch (error) {
+    console.error(`Erro ao baixar resultados de ${loteria}:`, error);
+    throw error;
+  }
+}
+
+// Rota para iniciar download manual dos resultados
+app.post('/api/download/:loteria', async (req, res) => {
+  try {
+    const { loteria } = req.params;
+    await downloadResults(loteria);
+    res.json({ message: 'Download iniciado com sucesso' });
+  } catch (error) {
+    console.error('Erro ao iniciar download:', error);
+    res.status(500).json({ error: 'Erro ao iniciar download' });
+  }
+});
+
+// Agendamento para baixar novos resultados todos os dias às 21:00
+cron.schedule('0 21 * * *', async () => {
+  console.log('Iniciando download automático de resultados...');
+  for (const loteria of Object.keys(LOTTERY_URLS)) {
+    try {
+      await downloadResults(loteria);
+    } catch (error) {
+      console.error(`Erro no download automático de ${loteria}:`, error);
+    }
+  }
 });
 
 // Test database connection and sync
@@ -150,30 +292,55 @@ app.get('/api/:loteria', async (req, res) => {
   }
 });
 
-app.get('/api/:loteria/:concurso', async (req, res) => {
+app.get('/api/:loteria/concursos', async (req, res) => {
   try {
-    const result = await Sorteio.findOne({
-      where: {
-        loteria: req.params.loteria,
-        concurso: req.params.concurso
-      }
+    const { loteria } = req.params;
+
+    const concursos = await Sorteio.findAll({
+      where: { loteria },
+      attributes: ['concurso', 'data_sorteio'],
+      order: [['concurso', 'DESC']],
+      raw: true,
+      group: ['concurso', 'data_sorteio']
     });
-    
-    if (!result) {
-      return res.status(404).json({ error: 'Contest not found' });
-    }
-    
-    res.json(result);
+
+    res.json(concursos);
   } catch (error) {
-    console.error('Error fetching contest details:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    console.error('Erro ao buscar concursos:', error);
+    res.status(500).json({ error: 'Erro ao buscar concursos' });
   }
 });
 
-// Rota para buscar resultados com filtros
+app.get('/api/:loteria/:concurso', async (req, res) => {
+  try {
+    const { loteria, concurso } = req.params;
+    const concursoNum = parseInt(concurso, 10);
+
+    if (isNaN(concursoNum)) {
+      return res.status(400).json({ error: 'Número do concurso inválido' });
+    }
+
+    const resultado = await Sorteio.findOne({
+      where: {
+        loteria,
+        concurso: concursoNum
+      }
+    });
+
+    if (!resultado) {
+      return res.status(404).json({ error: 'Resultado não encontrado' });
+    }
+
+    res.json(resultado);
+  } catch (error) {
+    console.error('Erro ao buscar resultado:', error);
+    res.status(500).json({ error: 'Erro ao buscar resultado' });
+  }
+});
+
 app.get('/api/search', async (req, res) => {
   try {
-    const { loteria, concurso, dataInicio, dataFim } = req.query;
+    const { loteria, concurso } = req.query;
     let where = {};
 
     if (loteria) {
@@ -181,28 +348,19 @@ app.get('/api/search', async (req, res) => {
     }
 
     if (concurso) {
-      where.concurso = concurso;
-    }
-
-    if (dataInicio || dataFim) {
-      where.data_sorteio = {};
-      if (dataInicio) {
-        where.data_sorteio[Op.gte] = new Date(dataInicio);
-      }
-      if (dataFim) {
-        where.data_sorteio[Op.lte] = new Date(dataFim);
-      }
+      where.concurso = parseInt(concurso, 10);
     }
 
     const resultados = await Sorteio.findAll({
       where,
-      order: [['data_sorteio', 'DESC']],
-      limit: req.query.limit ? parseInt(req.query.limit) : undefined
+      order: [['concurso', 'DESC']],
+      limit: 1,
+      raw: true
     });
 
     res.json(resultados);
   } catch (error) {
-    console.error('Erro na busca:', error);
+    console.error('Erro ao buscar resultados:', error);
     res.status(500).json({ error: 'Erro ao buscar resultados' });
   }
 });
